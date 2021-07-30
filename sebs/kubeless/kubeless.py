@@ -1,12 +1,15 @@
 import math
 import os
+import subprocess
 import shutil
 import time
 import uuid
 from typing import cast, Dict, List, Optional, Tuple, Type, Union  # noqa
 
 import docker
+from sebs import config
 
+from sebs.kubeless.storage import Storage
 from sebs.kubeless.function import KubelessFunction
 from sebs.kubeless.config import KubelessConfig
 from sebs.utils import execute
@@ -18,6 +21,7 @@ from sebs.faas.function import Function, ExecutionResult, Trigger
 from sebs.faas.storage import PersistentStorage
 from sebs.faas.system import System
 
+#TODO: namespace from kubeconfig
 
 class Kubeless(System):
     logs_client = None
@@ -57,24 +61,8 @@ class Kubeless(System):
         super().__init__(sebs_config, cache_client, docker_client)
         self.logging_handlers = logger_handlers
         self._config = config
-        self.storage: Optional[S3] = None
+        self.storage: 
 
-    def initialize(self, config: Dict[str, str] = {}):
-        # thread-safe
-        self.session = boto3.session.Session(
-            aws_access_key_id=self.config.credentials.access_key,
-            aws_secret_access_key=self.config.credentials.secret_key,
-        )
-        self.get_lambda_client()
-        self.get_storage()
-
-    def get_lambda_client(self):
-        if not hasattr(self, "client"):
-            self.client = self.session.client(
-                service_name="lambda",
-                region_name=self.config.region,
-            )
-        return self.client
 
     """
         Create a client instance for cloud storage. When benchmark and buckets
@@ -88,14 +76,14 @@ class Kubeless(System):
     """
 
     def get_storage(self, replace_existing: bool = False) -> PersistentStorage:
+        #TODO:
         if not self.storage:
-            self.storage = S3(
-                self.session,
+            self.storage = Storage(
                 self.cache_client,
-                self.config.region,
-                access_key=self.config.credentials.access_key,
-                secret_key=self.config.credentials.secret_key,
-                replace_existing=replace_existing,
+                replace_existing,
+                config.minio_url,
+                self.config.credentials.access_key,
+                self.config.credentials.secret_key,
             )
             self.storage.logging_handlers = self.logging_handlers
         else:
@@ -158,18 +146,20 @@ class Kubeless(System):
         memory = code_package.benchmark_config.memory
         code_size = code_package.code_size
         code_bucket: Optional[str] = None
-        func_name = AWS.format_function_name(func_name)
+        func_name = Kubeless.format_function_name(func_name)
         storage_client = self.get_storage()
-
+        
         # we can either check for exception or use list_functions
-        # there's no API for test
         try:
-            ret = self.client.get_function(FunctionName=func_name)
+            # subprocess will cause error if function is not present
+            subprocess.check_output(['kubeless', 'function', 'list', func_name])
+
             self.logging.info(
-                "Function {} exists on AWS, retrieve configuration.".format(func_name)
+                "Function {} exists on Kubeless, retrieve configuration.".format(func_name)
             )
-            # Here we assume a single Lambda role
-            lambda_function = LambdaFunction(
+
+            #TODO: correct when KubelessFunc is implemented
+            kubeless_function = KubelessFunction(
                 func_name,
                 code_package.benchmark,
                 ret["Configuration"]["FunctionArn"],
@@ -179,39 +169,21 @@ class Kubeless(System):
                 language_runtime,
                 self.config.resources.lambda_role(self.session),
             )
-            self.update_function(lambda_function, code_package)
-            lambda_function.updated_code = True
-            # TODO: get configuration of REST API
-        except self.client.exceptions.ResourceNotFoundException:
+            self.update_function(kubeless_function, code_package)
+            kubeless_function.updated_code = True
+
+        except subprocess.CalledProcessError:
+
             self.logging.info("Creating function {} from {}".format(func_name, package))
 
-            # AWS Lambda limit on zip deployment size
-            # Limit to 50 MB
-            # mypy doesn't recognize correctly the case when the same
-            # variable has different types across the path
             code_config: Dict[str, Union[str, bytes]]
-            if code_size < 50 * 1024 * 1024:
-                package_body = open(package, "rb").read()
-                code_config = {"ZipFile": package_body}
-            # Upload code package to S3, then use it
-            else:
-                code_package_name = cast(str, os.path.basename(package))
-                code_bucket, idx = storage_client.add_input_bucket(benchmark)
-                storage_client.upload(code_bucket, package, code_package_name)
-                self.logging.info("Uploading function {} code to {}".format(func_name, code_bucket))
-                code_config = {"S3Bucket": code_bucket, "S3Key": code_package_name}
-            ret = self.client.create_function(
-                FunctionName=func_name,
-                Runtime="{}{}".format(language, language_runtime),
-                Handler="handler.handler",
-                Role=self.config.resources.lambda_role(self.session),
-                MemorySize=memory,
-                Timeout=timeout,
-                Code=code_config,
-            )
-            # url = self.create_http_trigger(func_name, None, None)
-            # print(url)
-            lambda_function = LambdaFunction(
+
+            #TODO: check where in code_package correct info for subprocess is held
+            subprocess.check_output(['kubeless', 'function', 'deploy', func_name , '--runtime', '{}{}'.format(language, language_runtime),
+             '--from-file', code_package.code_location, '--handler', 'handler.handler', '--dependencies', code_package.code_package])
+            
+            #TODO: correct when KubelessFunc is implemented
+            kubeless_function = KubelessFunction(
                 func_name,
                 code_package.benchmark,
                 ret["FunctionArn"],
@@ -223,18 +195,17 @@ class Kubeless(System):
                 code_bucket,
             )
 
+        #TODO: add correct http trigger
         # Add LibraryTrigger to a new function
-        from sebs.aws.triggers import LibraryTrigger
 
         trigger = LibraryTrigger(func_name, self)
         trigger.logging_handlers = self.logging_handlers
-        lambda_function.add_trigger(trigger)
+        kubeless_function.add_trigger(trigger)
 
-        return lambda_function
+        return kubeless_function
 
     def cached_function(self, function: Function):
-
-        from sebs.aws.triggers import LibraryTrigger
+        #TODO:
 
         for trigger in function.triggers(Trigger.TriggerType.LIBRARY):
             trigger.logging_handlers = self.logging_handlers
@@ -255,28 +226,12 @@ class Kubeless(System):
 
     def update_function(self, function: Function, code_package: Benchmark):
 
-        function = cast(LambdaFunction, function)
+        function = cast(KubelessFunction, function)
         name = function.name
         code_size = code_package.code_size
         package = code_package.code_location
-        # Run AWS update
-        # AWS Lambda limit on zip deployment
-        if code_size < 50 * 1024 * 1024:
-            with open(package, "rb") as code_body:
-                self.client.update_function_code(FunctionName=name, ZipFile=code_body.read())
-        # Upload code package to S3, then update
-        else:
-            code_package_name = os.path.basename(package)
-            storage = cast(S3, self.get_storage())
-            bucket = function.code_bucket(code_package.benchmark, storage)
-            storage.upload(bucket, package, code_package_name)
-            self.client.update_function_code(
-                FunctionName=name, S3Bucket=bucket, S3Key=code_package_name
-            )
-        # and update config
-        self.client.update_function_configuration(
-            FunctionName=name, Timeout=function.timeout, MemorySize=function.memory
-        )
+        subprocess.check_output(['kubeless', 'function', 'update', name, '--from-file', package, '--dependencies', code_package.code_package])
+            
         self.logging.info("Published new function code")
 
     @staticmethod
@@ -287,114 +242,15 @@ class Kubeless(System):
             code_package.language_name,
             code_package.benchmark_config.memory,
         )
-        return AWS.format_function_name(func_name)
+        return Kubeless.format_function_name(func_name)
 
     @staticmethod
     def format_function_name(func_name: str) -> str:
-        # AWS Lambda does not allow hyphens in function names
-        func_name = func_name.replace("-", "_")
-        func_name = func_name.replace(".", "_")
+        # Kubeless doesnt restrict function names (as far as i know)
         return func_name
-
-    """
-        FIXME: does not clean the cache
-    """
-
-    def delete_function(self, func_name: Optional[str]):
-        self.logging.debug("Deleting function {}".format(func_name))
-        try:
-            self.client.delete_function(FunctionName=func_name)
-        except Exception:
-            self.logging.debug("Function {} does not exist!".format(func_name))
-
-    """
-        Prepare AWS resources to store experiment results.
-        Allocate one bucket.
-
-        :param benchmark: benchmark name
-        :return: name of bucket to store experiment results
-    """
-
-    def prepare_experiment(self, benchmark: str):
-        logs_bucket = self.get_storage().add_output_bucket(benchmark, suffix="logs")
-        return logs_bucket
-
-    """
-        Accepts AWS report after function invocation.
-        Returns a dictionary filled with values with various metrics such as
-        time, invocation time and memory consumed.
-
-        :param log: decoded log from CloudWatch or from synchronuous invocation
-        :return: dictionary with parsed values
-    """
-
-    @staticmethod
-    def parse_aws_report(
-        log: str, requests: Union[ExecutionResult, Dict[str, ExecutionResult]]
-    ) -> str:
-        aws_vals = {}
-        for line in log.split("\t"):
-            if not line.isspace():
-                split = line.split(":")
-                aws_vals[split[0]] = split[1].split()[0]
-        if "START RequestId" in aws_vals:
-            request_id = aws_vals["START RequestId"]
-        else:
-            request_id = aws_vals["REPORT RequestId"]
-        if isinstance(requests, ExecutionResult):
-            output = cast(ExecutionResult, requests)
-        else:
-            if request_id not in requests:
-                return request_id
-            output = requests[request_id]
-        output.request_id = request_id
-        output.provider_times.execution = int(float(aws_vals["Duration"]) * 1000)
-        output.stats.memory_used = float(aws_vals["Max Memory Used"])
-        if "Init Duration" in aws_vals:
-            output.provider_times.initialization = int(float(aws_vals["Init Duration"]) * 1000)
-        output.billing.billed_time = int(aws_vals["Billed Duration"])
-        output.billing.memory = int(aws_vals["Memory Size"])
-        output.billing.gb_seconds = output.billing.billed_time * output.billing.memory
-        return request_id
 
     def shutdown(self) -> None:
         super().shutdown()
-
-    def get_invocation_error(self, function_name: str, start_time: int, end_time: int):
-        if not self.logs_client:
-            self.logs_client = boto3.client(
-                service_name="logs",
-                aws_access_key_id=self.config.credentials.access_key,
-                aws_secret_access_key=self.config.credentials.secret_key,
-                region_name=self.config.region,
-            )
-
-        response = None
-        while True:
-            query = self.logs_client.start_query(
-                logGroupName="/aws/lambda/{}".format(function_name),
-                # queryString="filter @message like /REPORT/",
-                queryString="fields @message",
-                startTime=start_time,
-                endTime=end_time,
-            )
-            query_id = query["queryId"]
-
-            while response is None or response["status"] == "Running":
-                self.logging.info("Waiting for AWS query to complete ...")
-                time.sleep(5)
-                response = self.logs_client.get_query_results(queryId=query_id)
-            if len(response["results"]) == 0:
-                self.logging.info("AWS logs are not yet available, repeat after 15s...")
-                time.sleep(15)
-                response = None
-            else:
-                break
-        self.logging.error(f"Invocation error for AWS Lambda function {function_name}")
-        for message in response["results"]:
-            for value in message:
-                if value["field"] == "@message":
-                    self.logging.error(value["value"])
 
     def download_metrics(
         self,
@@ -404,52 +260,12 @@ class Kubeless(System):
         requests: Dict[str, ExecutionResult],
         metrics: dict,
     ):
-
-        if not self.logs_client:
-            self.logs_client = boto3.client(
-                service_name="logs",
-                aws_access_key_id=self.config.credentials.access_key,
-                aws_secret_access_key=self.config.credentials.secret_key,
-                region_name=self.config.region,
-            )
-
-        query = self.logs_client.start_query(
-            logGroupName="/aws/lambda/{}".format(function_name),
-            queryString="filter @message like /REPORT/",
-            startTime=math.floor(start_time),
-            endTime=math.ceil(end_time + 1),
-            limit=10000,
-        )
-        query_id = query["queryId"]
-        response = None
-
-        while response is None or response["status"] == "Running":
-            self.logging.info("Waiting for AWS query to complete ...")
-            time.sleep(1)
-            response = self.logs_client.get_query_results(queryId=query_id)
-        # results contain a list of matches
-        # each match has multiple parts, we look at `@message` since this one
-        # contains the report of invocation
-        results = response["results"]
-        results_count = len(requests.keys())
-        results_processed = 0
-        requests_ids = set(requests.keys())
-        for val in results:
-            for result_part in val:
-                if result_part["field"] == "@message":
-                    request_id = AWS.parse_aws_report(result_part["value"], requests)
-                    if request_id in requests:
-                        results_processed += 1
-                        requests_ids.remove(request_id)
-        self.logging.info(
-            f"Received {len(results)} entries, found results for {results_processed} "
-            f"out of {results_count} invocations"
-        )
+        pass
 
     def create_trigger(self, func: Function, trigger_type: Trigger.TriggerType) -> Trigger:
-        from sebs.aws.triggers import HTTPTrigger
+        #TODO
 
-        function = cast(LambdaFunction, func)
+        function = cast(KubelessFunction, func)
 
         if trigger_type == Trigger.TriggerType.HTTP:
 
@@ -476,19 +292,5 @@ class Kubeless(System):
         self.cache_client.update_function(function)
         return trigger
 
-    def _enforce_cold_start(self, function: Function):
-        func = cast(LambdaFunction, function)
-        self.get_lambda_client().update_function_configuration(
-            FunctionName=func.name,
-            Timeout=func.timeout,
-            MemorySize=func.memory,
-            Environment={"Variables": {"ForceColdStart": str(self.cold_start_counter)}},
-        )
-
     def enforce_cold_start(self, functions: List[Function], code_package: Benchmark):
-        self.cold_start_counter += 1
-        for func in functions:
-            self._enforce_cold_start(func)
-        import time
-
-        time.sleep(5)
+        raise NotImplementedError

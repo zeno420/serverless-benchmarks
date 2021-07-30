@@ -1,10 +1,9 @@
 from typing import cast, Optional
 
-from sebs.aws.s3 import S3
 from sebs.faas.function import Function
 
 
-class LambdaFunction(Function):
+class KubelessFunction(Function):
     def __init__(
         self,
         name: str,
@@ -27,7 +26,7 @@ class LambdaFunction(Function):
 
     @staticmethod
     def typename() -> str:
-        return "AWS.LambdaFunction"
+        return "KubelessFunction"
 
     def serialize(self) -> dict:
         return {
@@ -41,11 +40,11 @@ class LambdaFunction(Function):
         }
 
     @staticmethod
-    def deserialize(cached_config: dict) -> "LambdaFunction":
+    def deserialize(cached_config: dict) -> "KubelessFunction":
         from sebs.faas.function import Trigger
-        from sebs.aws.triggers import LibraryTrigger, HTTPTrigger
+        from sebs.kubeless.triggers import LibraryTrigger, HTTPTrigger
 
-        ret = LambdaFunction(
+        ret = KubelessFunction(
             cached_config["name"],
             cached_config["benchmark"],
             cached_config["arn"],
