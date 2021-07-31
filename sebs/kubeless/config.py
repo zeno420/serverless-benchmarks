@@ -10,7 +10,7 @@ from sebs.utils import LoggingHandlers
 
 class KubelessCredentials(Credentials):
 
-    def __init__():
+    def __init__(self):
         super().__init__()
 
     @staticmethod
@@ -57,14 +57,20 @@ class KubelessCredentials(Credentials):
 class KubelessResources(Resources):
 
     _url: str
+    _url_intern: str
     _access_key: str
     _secret_key: str
+    _gateway_type: str
+    _gateway_hostname: str
 
-    def __init__(self, url: str, access_key: str, secret_key: str):
+    def __init__(self, url: str, url_intern: str, access_key: str, secret_key: str, gateway_hostname: str, gateway_type: str):
         super().__init__()
         self._url = url
+        self._url_intern = url_intern
         self._access_key = access_key
         self._secret_key = secret_key
+        self._gateway_type = gateway_type
+        self._gateway_hostname = gateway_hostname
 
     @staticmethod
     def typename() -> str:
@@ -73,28 +79,51 @@ class KubelessResources(Resources):
     # FIXME: python3.7+ future annotatons
     @staticmethod
     def initialize(dct: dict) -> Resources:
-        if "storage" not in dct:
-            return
-        storage_dict = dct["storage"]
-        ret = KubelessResources(storage_dict["url"] if "url" in storage_dict else "",
-          storage_dict["access_key"] if "access_key" in storage_dict else "",
-          storage_dict["secret_key"] if "secret_key" in storage_dict else "")
+
+        url = ""
+        url_intern = ""
+        access_key = ""
+        secret_key = ""
+        gateway_hostname = ""
+        gateway_type = "nginx"
+
+        if "storage" in dct:
+            storage_dict = dct["storage"]
+            url = storage_dict["url"] if "url" in storage_dict else ""
+            url_intern = storage_dict["url_intern"] if "url_intern" in storage_dict else ""
+            access_key = storage_dict["access_key"] if "access_key" in storage_dict else ""
+            secret_key = storage_dict["secret_key"] if "secret_key" in storage_dict else ""
+
+        if "ingress" in dct:
+            ingress_dict = dct["ingress"]
+            gateway_hostname = ingress_dict["hostname"] if "hostname" in ingress_dict else ""
+            gateway_type = ingress_dict["type"] if "type" in ingress_dict else "nginx"
+
+        ret = KubelessResources(url, url_intern, access_key, secret_key, gateway_hostname, gateway_type)
         return ret
 
     def serialize(self) -> dict:
         out = {
             "storage": {
                 "url": self._url,
+                "url_intern": self._url_intern,
                 "access_key": self._access_key,
                 "secret_key": self._secret_key
-            } 
+            },
+            "ingress": {
+                "hostname": self._gateway_hostname,
+                "type": self._gateway_type
+            }
         }
         return out
 
     def update_cache(self, cache: Cache):
         cache.update_config(val=self._url, keys=["kubeless", "resources", "storage", "url"])
+        cache.update_config(val=self._url, keys=["kubeless", "resources", "storage", "url_intern"])
         cache.update_config(val=self._access_key, keys=["kubeless", "resources", "storage", "access_key"])
-        cache.update_config(val=self._secret_key, keys=["kubeless", "resources", "storage", "secret_key"])        
+        cache.update_config(val=self._secret_key, keys=["kubeless", "resources", "storage", "secret_key"])
+        cache.update_config(val=self._gateway_hostname, keys=["kubeless", "resources", "ingress", "hostname"])
+        cache.update_config(val=self._gateway_type, keys=["kubeless", "resources", "ingress", "type"])
 
     @staticmethod
     def deserialize(config: dict, cache: Cache, handlers: LoggingHandlers) -> Resources:
@@ -160,7 +189,6 @@ class KubelessConfig(Config):
             config_obj.logging.info("Using user-provided config for Kubeless")
             KubelessConfig.initialize(config_obj, config)
 
-        resources.set_region(config_obj.region)
         return config_obj
 
     """

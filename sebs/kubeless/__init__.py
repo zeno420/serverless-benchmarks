@@ -1,3 +1,2 @@
-from .aws import AWS, LambdaFunction  # noqa
-from .config import AWSConfig  # noqa
-from .s3 import S3  # noqa
+from .kubeless import Kubeless  # noqa
+from .config import KubelessConfig  # noqa

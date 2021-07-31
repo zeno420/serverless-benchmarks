@@ -106,6 +106,7 @@ class Config(ABC, LoggingBase):
         from sebs.azure.config import AzureConfig
         from sebs.gcp.config import GCPConfig
         from sebs.local.config import LocalConfig
+        from sebs.kubeless.config import KubelessConfig
 
         name = config["name"]
         func = {
@@ -113,6 +114,7 @@ class Config(ABC, LoggingBase):
             "azure": AzureConfig.deserialize,
             "gcp": GCPConfig.deserialize,
             "local": LocalConfig.deserialize,
+            "kubeless": KubelessConfig.deserialize,
         }.get(name)
         assert func, "Unknown config type!"
         return func(config[name] if name in config else config, cache, handlers)

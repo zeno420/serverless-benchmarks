@@ -12,6 +12,7 @@ from sebs import config
 from sebs.kubeless.storage import Storage
 from sebs.kubeless.function import KubelessFunction
 from sebs.kubeless.config import KubelessConfig
+from sebs.kubeless.triggers import HTTPTrigger
 from sebs.utils import execute
 from sebs.benchmark import Benchmark
 from sebs.cache import Cache
@@ -21,12 +22,14 @@ from sebs.faas.function import Function, ExecutionResult, Trigger
 from sebs.faas.storage import PersistentStorage
 from sebs.faas.system import System
 
-#TODO: namespace from kubeconfig
+#TODO: set context with namespace in kubeconfig, sebs.py will use it
+#TODO: implement wait for func creation or update logic
 
 class Kubeless(System):
     logs_client = None
     cached = False
     _config: KubelessConfig
+
 
     @staticmethod
     def name():
@@ -61,8 +64,7 @@ class Kubeless(System):
         super().__init__(sebs_config, cache_client, docker_client)
         self.logging_handlers = logger_handlers
         self._config = config
-        self.storage: 
-
+        self.storage: Optional[Storage] = None
 
     """
         Create a client instance for cloud storage. When benchmark and buckets
@@ -81,9 +83,9 @@ class Kubeless(System):
             self.storage = Storage(
                 self.cache_client,
                 replace_existing,
-                config.minio_url,
-                self.config.credentials.access_key,
-                self.config.credentials.secret_key,
+                self.config.resources._url,
+                self.config.resources._access_key,
+                self.config.resources._secret_key,
             )
             self.storage.logging_handlers = self.logging_handlers
         else:
@@ -110,6 +112,7 @@ class Kubeless(System):
 
     def package_code(self, directory: str, language_name: str, benchmark: str) -> Tuple[str, int]:
         # TODO: .js support
+        # TODO: requirements.txt mit in cache
 
         CONFIG_FILES = {
             "python": ["handler.py", "requirements.txt"],
@@ -129,7 +132,7 @@ class Kubeless(System):
         benchmark_archive = "{}.zip".format(os.path.join(directory, benchmark))
         self.logging.info("Created {} archive".format(benchmark_archive))
 
-        # TODO: check max uzip size, kubeless only supports to 1MB
+        # TODO: check max zip size, kubeless only supports to 1MB
         bytes_size = os.path.getsize(os.path.join(directory, benchmark_archive))
         mbytes = bytes_size / 1024.0 / 1024.0
         self.logging.info("Zip archive size {:2f} MB".format(mbytes))
@@ -142,14 +145,10 @@ class Kubeless(System):
         benchmark = code_package.benchmark
         language = code_package.language_name
         language_runtime = code_package.language_version
-        timeout = code_package.benchmark_config.timeout
-        memory = code_package.benchmark_config.memory
         code_size = code_package.code_size
-        code_bucket: Optional[str] = None
         func_name = Kubeless.format_function_name(func_name)
         storage_client = self.get_storage()
-        
-        # we can either check for exception or use list_functions
+
         try:
             # subprocess will cause error if function is not present
             subprocess.check_output(['kubeless', 'function', 'list', func_name])
@@ -158,16 +157,10 @@ class Kubeless(System):
                 "Function {} exists on Kubeless, retrieve configuration.".format(func_name)
             )
 
-            #TODO: correct when KubelessFunc is implemented
             kubeless_function = KubelessFunction(
                 func_name,
-                code_package.benchmark,
-                ret["Configuration"]["FunctionArn"],
-                code_package.hash,
-                timeout,
-                memory,
-                language_runtime,
-                self.config.resources.lambda_role(self.session),
+                benchmark,
+                code_package.hash
             )
             self.update_function(kubeless_function, code_package)
             kubeless_function.updated_code = True
@@ -177,39 +170,23 @@ class Kubeless(System):
             self.logging.info("Creating function {} from {}".format(func_name, package))
 
             code_config: Dict[str, Union[str, bytes]]
+            package = code_package.code_location
 
-            #TODO: check where in code_package correct info for subprocess is held
+            # create function
             subprocess.check_output(['kubeless', 'function', 'deploy', func_name , '--runtime', '{}{}'.format(language, language_runtime),
-             '--from-file', code_package.code_location, '--handler', 'handler.handler', '--dependencies', code_package.code_package])
-            
-            #TODO: correct when KubelessFunc is implemented
+             '--from-file', package, '--handler', 'handler.handler',
+             '--dependencies', ''])
+
             kubeless_function = KubelessFunction(
                 func_name,
-                code_package.benchmark,
-                ret["FunctionArn"],
-                code_package.hash,
-                timeout,
-                memory,
-                language_runtime,
-                self.config.resources.lambda_role(self.session),
-                code_bucket,
+                benchmark,
+                code_package.hash
             )
-
-        #TODO: add correct http trigger
-        # Add LibraryTrigger to a new function
-
-        trigger = LibraryTrigger(func_name, self)
-        trigger.logging_handlers = self.logging_handlers
-        kubeless_function.add_trigger(trigger)
 
         return kubeless_function
 
     def cached_function(self, function: Function):
-        #TODO:
 
-        for trigger in function.triggers(Trigger.TriggerType.LIBRARY):
-            trigger.logging_handlers = self.logging_handlers
-            cast(LibraryTrigger, trigger).deployment_client = self
         for trigger in function.triggers(Trigger.TriggerType.HTTP):
             trigger.logging_handlers = self.logging_handlers
 
@@ -230,8 +207,10 @@ class Kubeless(System):
         name = function.name
         code_size = code_package.code_size
         package = code_package.code_location
-        subprocess.check_output(['kubeless', 'function', 'update', name, '--from-file', package, '--dependencies', code_package.code_package])
-            
+
+        subprocess.check_output(['kubeless', 'function', 'update', name, '--from-file', package,
+         '--dependencies', '']) #TODO
+
         self.logging.info("Published new function code")
 
     @staticmethod
@@ -246,7 +225,11 @@ class Kubeless(System):
 
     @staticmethod
     def format_function_name(func_name: str) -> str:
-        # Kubeless doesnt restrict function names (as far as i know)
+        # Kubeless wants alphabetic as first char and no dots or underscores
+        func_name = func_name.replace(".", "-")
+        func_name = func_name.replace("_", "-")
+        if not func_name.startswith("sebs-"):
+            func_name = "sebs-" + func_name
         return func_name
 
     def shutdown(self) -> None:
@@ -263,28 +246,24 @@ class Kubeless(System):
         pass
 
     def create_trigger(self, func: Function, trigger_type: Trigger.TriggerType) -> Trigger:
-        #TODO
 
         function = cast(KubelessFunction, func)
 
         if trigger_type == Trigger.TriggerType.HTTP:
 
-            api_name = "{}-http-api".format(function.name)
-            http_api = self.config.resources.http_api(api_name, function, self.session)
-            # https://aws.amazon.com/blogs/compute/announcing-http-apis-for-amazon-api-gateway/
-            # but this is wrong - source arn must be {api-arn}/*/*
-            self.get_lambda_client().add_permission(
-                FunctionName=function.name,
-                StatementId=str(uuid.uuid1()),
-                Action="lambda:InvokeFunction",
-                Principal="apigateway.amazonaws.com",
-                SourceArn=f"{http_api.arn}/*/*",
-            )
-            trigger = HTTPTrigger(http_api.endpoint, api_name)
+            # delete trigger (enforced update)
+            try:
+                subprocess.check_output(['kubeless', 'trigger', 'http', 'delete', function.name])
+            except subprocess.CalledProcessError:
+                pass
+
+            # create http trigger for function
+            subprocess.check_output(['kubeless', 'trigger', 'http', 'create', function.name, '--function-name', function.name, '--gateway',
+             self._config.resources._gateway_type, '--path', 'sebs/{}'.format(function.name), '--hostname', self._config.resources._gateway_hostname])
+
+            url = "http://{}/sebs/{}".format(self._config.resources._gateway_hostname, function.name)
+            trigger = HTTPTrigger(url)
             trigger.logging_handlers = self.logging_handlers
-        elif trigger_type == Trigger.TriggerType.LIBRARY:
-            # should already exist
-            return func.triggers(Trigger.TriggerType.LIBRARY)[0]
         else:
             raise RuntimeError("Not supported!")
 

@@ -131,5 +131,20 @@
         }
       }
     }
+  },
+  "kubeless": {
+    "languages": {
+      "python": {
+        "base_images": {
+          "3.6": "gcr.io/google-appengine/python"
+        },
+        "images": [],
+        "username": "docker_user",
+        "deployment": {
+          "files": [ "handler.py", "storage.py"],
+          "packages": []
+        }
+      }
+    }
   }
 }
