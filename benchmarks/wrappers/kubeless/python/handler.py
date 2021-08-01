@@ -2,6 +2,8 @@ import datetime, io, json, os, sys, uuid
 from pprint import pprint
 
 
+#TODO: envrions in aus request ziehen
+
 def handler(event, context):
 
     income_timestamp = datetime.datetime.now().timestamp()
@@ -12,6 +14,12 @@ def handler(event, context):
         data = {}
     data['request-id'] = event['event-id']
     data['income-timestamp'] = income_timestamp
+
+    #prepare environment with storage vars
+    os.environ['MINIO_ADDRESS'] = data['minio_sebs_storage_url']
+    os.environ['MINIO_ACCESS_KEY']= data['minio_sebs_storage_access_key']
+    os.environ['MINIO_SECRET_KEY']= data['minio_sebs_storage_secret_key']
+
     begin = datetime.datetime.now()
 
     from function import function

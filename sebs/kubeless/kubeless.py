@@ -5,9 +5,11 @@ import shutil
 import time
 import uuid
 from typing import cast, Dict, List, Optional, Tuple, Type, Union  # noqa
+from time import sleep
 
 import docker
 from sebs import config
+from sebs import benchmark
 
 from sebs.kubeless.storage import Storage
 from sebs.kubeless.function import KubelessFunction
@@ -24,6 +26,7 @@ from sebs.faas.system import System
 
 #TODO: set context with namespace in kubeconfig, sebs.py will use it
 #TODO: implement wait for func creation or update logic
+#TODO: requirements.txt* beachten
 
 class Kubeless(System):
     logs_client = None
@@ -137,7 +140,8 @@ class Kubeless(System):
         mbytes = bytes_size / 1024.0 / 1024.0
         self.logging.info("Zip archive size {:2f} MB".format(mbytes))
 
-        return os.path.join(directory, "{}.zip".format(benchmark)), bytes_size
+        return directory, bytes_size
+        # return os.path.join(directory, "{}.zip".format(benchmark)), bytes_size
 
     def create_function(self, code_package: Benchmark, func_name: str) -> "KubelessFunction":
 
@@ -174,8 +178,10 @@ class Kubeless(System):
 
             # create function
             subprocess.check_output(['kubeless', 'function', 'deploy', func_name , '--runtime', '{}{}'.format(language, language_runtime),
-             '--from-file', package, '--handler', 'handler.handler',
-             '--dependencies', ''])
+             '--from-file', "{}/{}.zip".format(package, benchmark), '--handler', 'handler.handler',
+             '--dependencies', "{}/requirements.txt".format(package)])
+            #FIXME: find better solution for waiting till really created func
+            sleep(10)
 
             kubeless_function = KubelessFunction(
                 func_name,
@@ -205,11 +211,13 @@ class Kubeless(System):
 
         function = cast(KubelessFunction, function)
         name = function.name
-        code_size = code_package.code_size
+        benchmark = code_package.benchmark
         package = code_package.code_location
 
-        subprocess.check_output(['kubeless', 'function', 'update', name, '--from-file', package,
-         '--dependencies', '']) #TODO
+        subprocess.check_output(['kubeless', 'function', 'update', name, '--from-file', "{}/{}.zip".format(package, benchmark),
+         '--dependencies', "{}/requirements.txt".format(package)])
+        #FIXME: find better solution for waiting till really updated func
+        sleep(3)
 
         self.logging.info("Published new function code")
 
@@ -260,9 +268,11 @@ class Kubeless(System):
             # create http trigger for function
             subprocess.check_output(['kubeless', 'trigger', 'http', 'create', function.name, '--function-name', function.name, '--gateway',
              self._config.resources._gateway_type, '--path', 'sebs/{}'.format(function.name), '--hostname', self._config.resources._gateway_hostname])
+            #FIXME: find better solution for waiting till relly creted trigger
+            sleep(3)
 
             url = "http://{}/sebs/{}".format(self._config.resources._gateway_hostname, function.name)
-            trigger = HTTPTrigger(url)
+            trigger = HTTPTrigger(url, self.config.resources._url_intern, self.config.resources._access_key, self.config.resources._secret_key)
             trigger.logging_handlers = self.logging_handlers
         else:
             raise RuntimeError("Not supported!")

@@ -10,6 +10,8 @@ from sebs.cache import Cache
 from ..faas.storage import PersistentStorage
 
 
+#TODO: (de)serialize
+
 class Storage(PersistentStorage):
     @staticmethod
     def typename() -> str:
