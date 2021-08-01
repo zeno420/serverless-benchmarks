@@ -154,6 +154,7 @@ class KubelessConfig(Config):
         super().__init__()
         self._credentials = credentials
         self._resources = resources
+        self._region = "dummy"
 
     @staticmethod
     def typename() -> str:

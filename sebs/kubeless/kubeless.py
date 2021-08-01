@@ -113,18 +113,35 @@ class Kubeless(System):
         benchmark: benchmark name
     """
 
-    def package_code(self, directory: str, language_name: str, benchmark: str) -> Tuple[str, int]:
+    def package_code(self, directory: str, language_name: str, language_version: str, benchmark: str) -> Tuple[str, int]:
         # TODO: .js support
-        # TODO: requirements.txt mit in cache
+
 
         CONFIG_FILES = {
-            "python": ["handler.py", "requirements.txt"],
+            "python": ["handler.py", "requirements.txt", "requirements.txt.3.6", "requirements.txt.3.7"],
         }
+        VERSION_REQUIREMENT_FILE = {
+            "python": {
+                "3.6": "requirements.txt.3.6",
+                "3.7": "requirements.txt.3.7"
+            }
+        }
+
         package_config = CONFIG_FILES[language_name]
+        requirement_files = VERSION_REQUIREMENT_FILE[language_name][language_version]
+
         function_dir = os.path.join(directory, "function")
         os.makedirs(function_dir)
         # move all files to 'function' except CONFIG_FILES
         for file in os.listdir(directory):
+
+            if file in requirement_files:
+                #FIXME: remove language specific
+                with open(os.path.join(directory, 'requirements.txt'), 'a') as requirement_file:
+                    with open(os.path.join(directory, file), 'r') as input_file:
+                        requirement_file.write('\n')
+                        requirement_file.write(input_file.read())
+
             if file not in package_config:
                 file = os.path.join(directory, file)
                 shutil.move(file, function_dir)
@@ -179,7 +196,7 @@ class Kubeless(System):
             # create function
             subprocess.check_output(['kubeless', 'function', 'deploy', func_name , '--runtime', '{}{}'.format(language, language_runtime),
              '--from-file', "{}/{}.zip".format(package, benchmark), '--handler', 'handler.handler',
-             '--dependencies', "{}/requirements.txt".format(package)])
+             '--dependencies', "{}/requirements.txt".format(package), '--timeout', '600', '--env', 'REQ_MB_LIMIT=128'])
             #FIXME: find better solution for waiting till really created func
             sleep(10)
 
