@@ -136,7 +136,22 @@
     "languages": {
       "python": {
         "base_images": {
-          "3.6": "gcr.io/google-appengine/python"
+          "3.6": "python3.6"
+        },
+        "images": [],
+        "username": "docker_user",
+        "deployment": {
+          "files": [ "handler.py", "storage.py"],
+          "packages": ["minio"]
+        }
+      }
+    }
+  },
+  "fission": {
+    "languages": {
+      "python": {
+        "base_images": {
+          "3.7": "python3.7"
         },
         "images": [],
         "username": "docker_user",

@@ -7,6 +7,7 @@ from sebs.azure.azure import Azure
 from sebs.gcp import GCP
 from sebs.local import Local
 from sebs.kubeless import Kubeless
+from sebs.fission import Fission
 from sebs.cache import Cache
 from sebs.config import SeBSConfig
 from sebs.benchmark import Benchmark
@@ -80,7 +81,7 @@ class SeBS(LoggingBase):
         deployment_config: Optional[Config] = None,
     ) -> FaaSSystem:
         name = config["name"]
-        implementations = {"aws": AWS, "azure": Azure, "gcp": GCP, "local": Local, "kubeless": Kubeless}
+        implementations = {"aws": AWS, "azure": Azure, "gcp": GCP, "local": Local, "kubeless": Kubeless, "fission": Fission}
         if name not in implementations:
             raise RuntimeError("Deployment {name} not supported!".format(name=name))
 

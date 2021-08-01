@@ -167,6 +167,23 @@ class KubelessTestSequence(
         return deployment_client
 
 
+class FissionTestSequence(
+    unittest.TestCase,
+    metaclass=TestSequenceMeta,
+    deployment_name="fission",
+    triggers=[Trigger.TriggerType.HTTP],
+):
+    def get_deployment(self, benchmark_name):
+        deployment_name = "fission"
+        assert cloud_config
+        deployment_client = self.client.get_deployment(
+            cloud_config,
+            logging_filename=f"regression_{deployment_name}_{benchmark_name}.log",
+        )
+        deployment_client.initialize()
+        return deployment_client
+
+
 # https://stackoverflow.com/questions/22484805/a-simple-working-example-for-testtools-concurrentstreamtestsuite
 class TracingStreamResult(testtools.StreamResult):
     all_correct: bool
@@ -218,6 +235,9 @@ def regression_suite(
     if "kubeless" in providers:
         assert "kubeless" in cloud_config
         suite.addTest(unittest.defaultTestLoader.loadTestsFromTestCase(KubelessTestSequence))
+    if "fission" in providers:
+        assert "fission" in cloud_config
+        suite.addTest(unittest.defaultTestLoader.loadTestsFromTestCase(FissionTestSequence))
     tests = []
     # mypy is confused here
     for case in suite:
